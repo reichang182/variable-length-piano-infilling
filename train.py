@@ -25,7 +25,7 @@ parser.add_argument('--dict-file', type=str, default='/home/csc63182/NAS-189/hom
 parser.add_argument('--data-file', type=str, default='/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/worded_data.pickle')
 parser.add_argument('--train', default=False, action='store_true')
 parser.add_argument('--save-path', type=str, default="/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/trained-models/partial-target")
-parser.add_argument('--batch-size', type=int, default=2)
+parser.add_argument('--batch-size', type=int, default=6)
 parser.add_argument('--target-max-percent', type=float, default=0.2, help="Up to `valid_seq_len * target_max_percent` tokens will be masked out for prediction")
 parser.add_argument('--n-step-bars', type=int, default=16, help='how many bars to step before next training data fetching (the smaller the more training data)')
 parser.add_argument('--max-seq-len', type=int, default=512, help='all sequences are padded to `max_seq_len`')
@@ -232,6 +232,6 @@ if __name__ == '__main__':
     with open(args.dict_file, 'rb') as f:
         e2w, w2e = pickle.load(f)
     model = XLNetForPredictingMiddleNotes(configuration, e2w, w2e).to(device)
-    training_data = prepare_data.prepare_data_for_training(args.data_file, is_train=True, e2w=e2w, w2e=w2e, n_step_bars=args.n_step_bars)
-    model.train(training_data=training_data, n_epochs=20)
+    training_data = prepare_data.prepare_data_for_training(args.data_file, is_train=True, e2w=e2w, w2e=w2e, n_step_bars=args.n_step_bars, max_len=args.max_seq_len)
+    model.train(training_data=training_data, n_epochs=args.train_epochs)
 

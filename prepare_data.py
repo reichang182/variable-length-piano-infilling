@@ -423,7 +423,7 @@ def convert_midis_to_worded_data(midi_folder, save_folder):
     construct_dict(save_dict_path)
     tuple_event_to_word(tuple_events, dict_file=save_dict_path, save_path=save_data_path)
 
-def prepare_data_for_training(data_file, e2w=None, w2e=None, is_train=True, n_step_bars=16):
+def prepare_data_for_training(data_file, e2w=None, w2e=None, is_train=True, n_step_bars=16, max_len=512):
     assert e2w != None and w2e != None
 
     print("Loading from data file: %s" % data_file)
@@ -462,10 +462,10 @@ def prepare_data_for_training(data_file, e2w=None, w2e=None, is_train=True, n_st
             x_lens.append(len(x))
 
             if is_train:
-                while len(x) < 512:
+                while len(x) < max_len:
                     x.append(pad_word)
 
-            if len(x) == 512:
+            if len(x) == max_len:
                 xs.append(x)
 
     # statistics of x
@@ -475,7 +475,7 @@ def prepare_data_for_training(data_file, e2w=None, w2e=None, is_train=True, n_st
     # for i in range(500, 1000, 100):
     #     print("number of data whose len < %d: %d" % (i, np.sum(x_lens < i)))
     print("Total number of data", len(xs))
-    print("We use data whose len < 512, remained number of data: %d" % (len(xs)))
+    print("We use data whose len < %d, remained number of data: %d" % (max_len, len(xs)))
 
     # shape of xs, ys: [n_training_data, seq_len, 5]
     # -> xy: [n_training_data, 2, seq_len, 5]
