@@ -246,9 +246,9 @@ def construct_dict(save_dict_path):
                 e2w['Tempo %d' % i] = count
                 count += 1
 
-        # Bar 0 ~ 7
+        # Bar 0 ~ 15
         elif etype == 'Bar':
-            for i in range(8):
+            for i in range(16):
                 e2w['Bar %d' % i] = count
                 count += 1
 
@@ -465,15 +465,15 @@ def prepare_data_for_training(data_file, e2w=None, w2e=None, is_train=True, n_st
                 while len(x) < 512:
                     x.append(pad_word)
 
-            if len(x) <= 512:
+            if len(x) == 512:
                 xs.append(x)
 
     # statistics of x
     print("=" * 70)
     x_lens = np.array(x_lens)
     print("Mean, std, min, max of len(x):", statistics.mean(x_lens), statistics.stdev(x_lens), min(x_lens), max(x_lens))
-    for i in range(500, 1000, 100):
-        print("number of data whose len < %d: %d" % (i, np.sum(x_lens < i)))
+    # for i in range(500, 1000, 100):
+    #     print("number of data whose len < %d: %d" % (i, np.sum(x_lens < i)))
     print("Total number of data", len(xs))
     print("We use data whose len < 512, remained number of data: %d" % (len(xs)))
 
