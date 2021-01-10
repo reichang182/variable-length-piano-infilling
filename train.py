@@ -32,7 +32,7 @@ parser.add_argument('--max-seq-len', type=int, default=512, help='all sequences 
 parser.add_argument('--train-epochs', type=int, default=1000, help='number of training epochs')
 parser.add_argument('--init-lr', type=float, default=1e-4, help='initial learning rate')
 
-# for testing phase
+# for prediction phase
 parser.add_argument('--ckpt-path', type=str, default="/home/csc63182/NAS-189/homes/csc63182/remi/checkpoints/Linformer-6tuple-bs28/saved_10.ckpt")
 
 args = parser.parse_args()
@@ -120,7 +120,7 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
             self.proj.append(nn.Linear(xlnet_config.d_model, self.n_tokens[i]))
         self.proj = nn.ModuleList(self.proj)
 
-    def forward(self, input_ids, attention_mask, perm_mask):
+    def forward(self, input_ids, attention_mask, perm_mask, target_mapping):
         # convert input_ids into embeddings and merge them through linear layer
         embs =[]
         for i, key in enumerate(self.e2w):
@@ -129,7 +129,10 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         emb_linear = self.in_linear(embs)
 
         # feed to xlnet
-        y = self.xlnet(inputs_embeds=emb_linear, attention_mask=attention_mask, perm_mask=perm_mask)
+        y = self.xlnet(inputs_embeds=emb_linear,
+                       attention_mask=attention_mask,
+                       perm_mask=perm_mask,
+                       target_mapping=target_mapping)
         y = y.last_hidden_state
 
         # convert embeddings back to logits for prediction
@@ -176,7 +179,13 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
                     for i in range(target_starts[b], target_starts[b]+target_lens[b]):
                         perm_mask[b, i, target_starts[b]:i] = 0
 
-                y = self.forward(input_ids, attn_mask, perm_mask)
+                # target mapping: partial prediction
+                target_mapping = torch.zeros(args.batch_size, max(target_lens), args.max_seq_len).to(device)
+                for b in range(args.batch_size):
+                    for i, j in enumerate(range(target_starts[b], target_starts[b]+target_lens[b])):
+                        target_mapping[b, i, j] = 1
+
+                y = self.forward(input_ids, attn_mask, perm_mask, target_mapping)
 
                 # reshape (b, s, f) -> (b, f, s)
                 for i, etype in enumerate(self.e2w):
@@ -184,12 +193,14 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
 
 
                 # calculate losses
-                loss_mask = torch.zeros(args.batch_size, args.max_seq_len)
+                target = torch.zeros(args.batch_size, max(target_lens), len(self.e2w), dtype=torch.long)
+                loss_mask = torch.zeros(args.batch_size, max(target_lens))
                 for b in range(args.batch_size):
-                    loss_mask[b, target_starts[b]:target_starts[b]+target_lens[b]] = 1
+                    target[b, :target_lens[b], :] = input_ids[b, target_starts[b]:target_starts[b]+target_lens[b], :]
+                    loss_mask[b, :target_lens[b]] = 1
                 losses = []
                 for i, etype in enumerate(self.e2w):
-                    losses.append(self.compute_loss(y[i], input_ids[..., i], loss_mask.to(device)))
+                    losses.append(self.compute_loss(y[i], target[..., i].to(device), loss_mask.to(device)))
                 total_loss = sum(losses) / len(self.e2w)
 
                 # udpate
