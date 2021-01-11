@@ -34,6 +34,7 @@ parser.add_argument('--train-epochs', type=int, default=2000, help='number of tr
 parser.add_argument('--init-lr', type=float, default=1e-4, help='initial learning rate')
 
 # for prediction phase
+parser.add_argument('--test-data-file', type=str, default='/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes-test/worded_data.pickle')
 parser.add_argument('--ckpt-path', type=str, default="/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/trained-models/short-target-mapping/loss34.ckpt")
 parser.add_argument('--song-idx', type=int, default=170)
 
@@ -94,9 +95,6 @@ def to_midi(data, word2event, path_outfile):
                                      )
         tes.append(te)
 
-    with open(path_outfile[:-5] + '.events', 'wb') as f:
-        pickle.dump(tes, f, protocol=pickle.HIGHEST_PROTOCOL)
-
     prepare_data.tuple_events_to_midi(tes, path_outfile)
 
 ########################################
@@ -156,7 +154,7 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         # for deciding whether the current input_ids is a <PAD> token
         self.tempo_pad_word = self.e2w['Tempo']['Tempo <PAD>']
 
-        self.eos_word = np.array([self.e2w[etype]['%s <EOS>' % etype] for etype in self.e2w])
+        self.eos_word = torch.Tensor([self.e2w[etype]['%s <EOS>' % etype] for etype in self.e2w]).to(device)
 
         # word_emb: embeddings to change token ids into embeddings
         self.word_emb = []
@@ -303,9 +301,16 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         print("Song idx: %d, song length: %d" % (song_idx, seq_len))
         print("Target_start: %d, target_len: %d" % (target_start, target_len))
 
+        target_begin_token = [self.w2e[etype][datum[0, target_start, j]].split(' ')[1] for j, etype in enumerate(self.w2e)]
+        target_end_token = [self.w2e[etype][datum[0, target_start+target_len-1, j]].split(' ')[1] for j, etype in enumerate(self.w2e)]
+        save_midi_folder = "song%d_(start)bar%dpos%s_(end)bar%dpos%s" % (song_idx, int(target_begin_token[1])+1, target_begin_token[2], int(target_end_token[1])+1, target_end_token[2])
+        save_midi_folder = save_midi_folder.replace('/', '|')
+        os.makedirs(save_midi_folder, exist_ok=True)
+        print("save midi to `%s`" % save_midi_folder)
+
         for sidx in range(n_songs):
             input_ids = torch.from_numpy(datum).to(device)
-            datum[target_start:target_start+target_len] = self.eos_word     # serve as masked words
+            input_ids[0, target_start:target_start+target_len] = self.eos_word     # serve as masked words
 
             attn_mask = None
 
@@ -336,15 +341,17 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
                 input_ids[0, target_pos] = torch.from_numpy(cur_word).to(device)
 
             input_ids = input_ids.cpu().detach().numpy()[0]
-            to_midi(input_ids, self.w2e, "song%d_%d.midi" % (song_idx, sidx))
 
-            for i in range(seq_len):
-                if i in range(target_start, target_start+target_len):
-                    print("(target)", end=' ')
-                else:
-                    print("        ", end=' ')
-                print(*[self.w2e[etype][input_ids[i, j]] for j, etype in enumerate(self.w2e)], sep=', ')
+            # for i in range(seq_len):
+            #     if i in range(target_start, target_start+target_len):
+            #         print("(target)", end=' ')
+            #     else:
+            #         print("        ", end=' ')
+            #     print(*[self.w2e[etype][input_ids[i, j]] for j, etype in enumerate(self.w2e)], sep=', ')
 
+            to_midi(input_ids, self.w2e, os.path.join(save_midi_folder, "song%d_%d.midi" % (song_idx, sidx)))
+
+        print("=" * 80)
 
     def nucleus(self, logit, p=0.9, t=1.2):
         logit = logit.cpu().detach().numpy()
@@ -366,7 +373,8 @@ if __name__ == '__main__':
         training_data = prepare_data.prepare_data_for_training(args.data_file, is_train=True, e2w=e2w, w2e=w2e, n_step_bars=args.n_step_bars, max_len=args.max_seq_len)
         model.train(training_data=training_data, n_epochs=args.train_epochs)
     else:
-        training_data = prepare_data.prepare_data_for_training(args.data_file, is_train=False, e2w=e2w, w2e=w2e, n_step_bars=args.n_step_bars, max_len=args.max_seq_len)
+        test_data = prepare_data.prepare_data_for_training(args.data_file, is_train=False, e2w=e2w, w2e=w2e, n_step_bars=args.n_step_bars, max_len=args.max_seq_len)
         model.load_state_dict(torch.load(args.ckpt_path))
-        model.predict(data=training_data, n_songs=10, song_idx=args.song_idx)
+        for i in range(0, len(test_data), 10):
+            model.predict(data=test_data, n_songs=10, song_idx=i)
 

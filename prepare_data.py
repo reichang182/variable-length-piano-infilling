@@ -538,9 +538,14 @@ def split_data(data_file):
 
 
 if __name__ == '__main__':
-    midi_folder = '/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/datasets/midi/midi_synchronized/'
-    save_folder = '/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/'
+    # for loading training data
+    # midi_folder = '/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/datasets/midi/midi_synchronized/'
+    # save_folder = '/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/'
+    # convert_midis_to_worded_data(midi_folder, save_folder)
+
+    # for loading testing data
+    midi_folder = '/home/csc63182/NAS-189/homes/csc63182/data/cp_linear_from-scratch_codes/gen_global_mall/gpu2'
+    save_folder = '/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes-test/'
     convert_midis_to_worded_data(midi_folder, save_folder)
-    # split_data('/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/datasets/midi/ls/worded_data_with_tempo.pickle')
-    # tuple_events = load_tuple_event()
-    # tuple_event_to_word(tuple_events)
+
+
