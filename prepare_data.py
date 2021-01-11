@@ -465,7 +465,7 @@ def prepare_data_for_training(data_file, e2w=None, w2e=None, is_train=True, n_st
                 while len(x) < max_len:
                     x.append(pad_word)
 
-            if len(x) == max_len:
+            if len(x) <= max_len:
                 xs.append(x)
 
     # statistics of x

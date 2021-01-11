@@ -4,6 +4,7 @@ import sys
 import time
 import datetime
 import os
+import copy
 
 from transformers import XLNetTokenizer, XLNetModel, XLNetConfig, AdamW
 
@@ -24,16 +25,17 @@ parser = argparse.ArgumentParser(description='')
 parser.add_argument('--dict-file', type=str, default='/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/dictionary.pickle')
 parser.add_argument('--data-file', type=str, default='/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/worded_data.pickle')
 parser.add_argument('--train', default=False, action='store_true')
-parser.add_argument('--save-path', type=str, default="/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/trained-models/partial-target")
+parser.add_argument('--save-path', type=str, default="/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/trained-models/partial-target-test")
 parser.add_argument('--batch-size', type=int, default=6)
 parser.add_argument('--target-max-percent', type=float, default=0.2, help="Up to `valid_seq_len * target_max_percent` tokens will be masked out for prediction")
 parser.add_argument('--n-step-bars', type=int, default=16, help='how many bars to step before next training data fetching (the smaller the more training data)')
 parser.add_argument('--max-seq-len', type=int, default=512, help='all sequences are padded to `max_seq_len`')
-parser.add_argument('--train-epochs', type=int, default=1000, help='number of training epochs')
+parser.add_argument('--train-epochs', type=int, default=2000, help='number of training epochs')
 parser.add_argument('--init-lr', type=float, default=1e-4, help='initial learning rate')
 
 # for prediction phase
-parser.add_argument('--ckpt-path', type=str, default="/home/csc63182/NAS-189/homes/csc63182/remi/checkpoints/Linformer-6tuple-bs28/saved_10.ckpt")
+parser.add_argument('--ckpt-path', type=str, default="/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/trained-models/short-target-mapping/loss34.ckpt")
+parser.add_argument('--song-idx', type=int, default=170)
 
 args = parser.parse_args()
 
@@ -78,6 +80,55 @@ configuration = XLNetConfig().from_dict({
   # "vocab_size": 32000
 })
 
+# --- write tool --- #
+def to_midi(data, word2event, path_outfile):
+    tes = []    # tuple events
+    for e in data:
+        e = [word2event[etype][e[i]] for i, etype in enumerate(word2event)]
+        te = prepare_data.GroupEvent(Tempo=int(e[0].split(' ')[1]),
+                                     Bar=int(e[1].split(' ')[1]),
+                                     Position=e[2].split(' ')[1],
+                                     Pitch=int(e[3].split(' ')[1]),
+                                     Duration=int(e[4].split(' ')[1]),
+                                     Velocity=int(e[5].split(' ')[1])
+                                     )
+        tes.append(te)
+
+    with open(path_outfile[:-5] + '.events', 'wb') as f:
+        pickle.dump(tes, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    prepare_data.tuple_events_to_midi(tes, path_outfile)
+
+########################################
+# search strategy: temperature (re-shape)
+########################################
+def temperature(logits, temperature):
+    probs = np.exp(logits / temperature) / np.sum(np.exp(logits / temperature))
+    return probs
+
+########################################
+# search strategy: nucleus (truncate)
+########################################
+def nucleus(probs, p):
+    # print('probs:', probs)
+    probs /= sum(probs)
+    sorted_probs = np.sort(probs)[::-1]
+    sorted_index = np.argsort(probs)[::-1]
+    cusum_sorted_probs = np.cumsum(sorted_probs)
+    after_threshold = cusum_sorted_probs > p
+    # print('probs:', probs)
+    # print(after_threshold)
+    if sum(after_threshold) > 0:
+        last_index = np.where(after_threshold)[0][1]
+
+        candi_index = sorted_index[:last_index]
+    else:
+        candi_index = sorted_index[:3] # just assign a value
+    candi_probs = [probs[i] for i in candi_index]
+    candi_probs /= sum(candi_probs)
+    word = np.random.choice(candi_index, size=1, p=candi_probs)[0]
+    return word
+
 class Embeddings(nn.Module):
     def __init__(self, n_token, d_model):
         super(Embeddings, self).__init__()
@@ -104,6 +155,8 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
 
         # for deciding whether the current input_ids is a <PAD> token
         self.tempo_pad_word = self.e2w['Tempo']['Tempo <PAD>']
+
+        self.eos_word = np.array([self.e2w[etype]['%s <EOS>' % etype] for etype in self.e2w])
 
         # word_emb: embeddings to change token ids into embeddings
         self.word_emb = []
@@ -238,11 +291,82 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
             else:
                 torch.save(self.state_dict(), path_saved_ckpt + '.ckpt')
 
+    def predict(self, data=None, n_songs=10, song_idx=0, target_start=None, target_len=None):
+        datum = np.array(data[song_idx:song_idx+1][0])[None]
+        seq_len = datum.shape[1]
+
+        if target_start == None:
+            target_start = np.random.randint(int(seq_len * (1 - args.target_max_percent)))
+        if target_len == None:
+            target_len = np.random.randint(int(seq_len * args.target_max_percent * 0.75), int(seq_len * args.target_max_percent))
+
+        print("Song idx: %d, song length: %d" % (song_idx, seq_len))
+        print("Target_start: %d, target_len: %d" % (target_start, target_len))
+
+        for sidx in range(n_songs):
+            input_ids = torch.from_numpy(datum).to(device)
+            datum[target_start:target_start+target_len] = self.eos_word     # serve as masked words
+
+            attn_mask = None
+
+            # generate perm_mask
+            # 0: attend, 1: do not attend
+            perm_mask = torch.ones(1, seq_len, seq_len).to(device)
+            perm_mask[0, :, :target_start] = 0
+            perm_mask[0, :, target_start + target_len:] = 0
+            for i in range(target_start, target_start+target_len):
+                perm_mask[0, i, target_start:i] = 0
+
+            for target_pos in range(target_start, target_start+target_len):
+                # target mapping: partial prediction
+                target_mapping = torch.zeros(1, 1, seq_len).to(device)
+                target_mapping[0, 0, target_pos] = 1
+
+                y = self.forward(input_ids, attn_mask, perm_mask, target_mapping)
+
+                y_logits = []
+                for i, etype in enumerate(self.e2w):
+                    y_logits.append(y[i][0, -1, :])
+
+                cur_word = []
+                for i, etype in enumerate(self.e2w):
+                    cur_word.append(self.nucleus(y_logits[i], p=0.9, t=0.8))
+
+                cur_word = np.array(cur_word)
+                input_ids[0, target_pos] = torch.from_numpy(cur_word).to(device)
+
+            input_ids = input_ids.cpu().detach().numpy()[0]
+            to_midi(input_ids, self.w2e, "song%d_%d.midi" % (song_idx, sidx))
+
+            for i in range(seq_len):
+                if i in range(target_start, target_start+target_len):
+                    print("(target)", end=' ')
+                else:
+                    print("        ", end=' ')
+                print(*[self.w2e[etype][input_ids[i, j]] for j, etype in enumerate(self.w2e)], sep=', ')
+
+
+    def nucleus(self, logit, p=0.9, t=1.2):
+        logit = logit.cpu().detach().numpy()
+        probs = temperature(logits=logit, temperature=t)
+        cur_word = nucleus(probs, p=p)
+        return cur_word
+
+
+
+
+
 
 if __name__ == '__main__':
     with open(args.dict_file, 'rb') as f:
         e2w, w2e = pickle.load(f)
     model = XLNetForPredictingMiddleNotes(configuration, e2w, w2e).to(device)
-    training_data = prepare_data.prepare_data_for_training(args.data_file, is_train=True, e2w=e2w, w2e=w2e, n_step_bars=args.n_step_bars, max_len=args.max_seq_len)
-    model.train(training_data=training_data, n_epochs=args.train_epochs)
+
+    if args.train:
+        training_data = prepare_data.prepare_data_for_training(args.data_file, is_train=True, e2w=e2w, w2e=w2e, n_step_bars=args.n_step_bars, max_len=args.max_seq_len)
+        model.train(training_data=training_data, n_epochs=args.train_epochs)
+    else:
+        training_data = prepare_data.prepare_data_for_training(args.data_file, is_train=False, e2w=e2w, w2e=w2e, n_step_bars=args.n_step_bars, max_len=args.max_seq_len)
+        model.load_state_dict(torch.load(args.ckpt_path))
+        model.predict(data=training_data, n_songs=10, song_idx=args.song_idx)
 
