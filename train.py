@@ -155,6 +155,7 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         self.tempo_pad_word = self.e2w['Tempo']['Tempo <PAD>']
 
         self.eos_word = torch.Tensor([self.e2w[etype]['%s <EOS>' % etype] for etype in self.e2w]).to(device)
+        self.bos_word = torch.Tensor([self.e2w[etype]['%s <BOS>' % etype] for etype in self.e2w]).long().to(device)
 
         # word_emb: embeddings to change token ids into embeddings
         self.word_emb = []
@@ -171,7 +172,7 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
             self.proj.append(nn.Linear(xlnet_config.d_model, self.n_tokens[i]))
         self.proj = nn.ModuleList(self.proj)
 
-    def forward(self, input_ids, attention_mask, perm_mask, target_mapping):
+    def forward(self, input_ids, attention_mask, perm_mask, target_mapping, input_ids_g=None):
         # convert input_ids into embeddings and merge them through linear layer
         embs =[]
         for i, key in enumerate(self.e2w):
@@ -179,11 +180,19 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         embs = torch.cat([*embs], dim=-1)
         emb_linear = self.in_linear(embs)
 
+        # (for query stream) convert input_ids into embeddings and merge them through linear layer
+        embs_g =[]
+        for i, key in enumerate(self.e2w):
+            embs_g.append(self.word_emb[i](input_ids_g[..., i]))
+        embs_g = torch.cat([*embs_g], dim=-1)
+        emb_linear_g = self.in_linear(embs_g)
+
         # feed to xlnet
         y = self.xlnet(inputs_embeds=emb_linear,
                        attention_mask=attention_mask,
                        perm_mask=perm_mask,
-                       target_mapping=target_mapping)
+                       target_mapping=target_mapping,
+                       inputs_embeds_g=emb_linear_g)
         y = y.last_hidden_state
 
         # convert embeddings back to logits for prediction
@@ -221,6 +230,12 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
                 target_starts = [np.random.randint(int(seq_len * (1 - args.target_max_percent))) for seq_len in valid_seq_lengths]
                 target_lens = [np.random.randint(int(seq_len * args.target_max_percent / 2), int(seq_len * args.target_max_percent)) for seq_len in valid_seq_lengths]
 
+                # prepare input_ids_g
+                input_ids_g = torch.zeros(args.batch_size, max(target_lens), len(self.e2w)).long().to(device)
+                for b in range(args.batch_size):
+                    input_ids_g[b, :target_lens[b]] = input_ids[b, target_starts[b]:target_starts[b]+target_lens[b]]
+                    input_ids_g[b, :target_lens[b], [0, 3, 4, 5]] = self.bos_word[[0, 3, 4, 5]]  # mask out tokens except bar & pos
+
                 # generate perm_mask
                 # 0: attend, 1: do not attend
                 perm_mask = torch.ones(args.batch_size, args.max_seq_len, args.max_seq_len).to(device)
@@ -236,7 +251,7 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
                     for i, j in enumerate(range(target_starts[b], target_starts[b]+target_lens[b])):
                         target_mapping[b, i, j] = 1
 
-                y = self.forward(input_ids, attn_mask, perm_mask, target_mapping)
+                y = self.forward(input_ids, attn_mask, perm_mask, target_mapping, input_ids_g=input_ids_g)
 
                 # reshape (b, s, f) -> (b, f, s)
                 for i, etype in enumerate(self.e2w):
@@ -289,6 +304,7 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
             else:
                 torch.save(self.state_dict(), path_saved_ckpt + '.ckpt')
 
+
     def predict(self, data=None, n_songs=10, song_idx=0, target_start=None, target_len=None):
         datum = np.array(data[song_idx:song_idx+1][0])[None]
         seq_len = datum.shape[1]
@@ -310,7 +326,7 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
 
         for sidx in range(n_songs):
             input_ids = torch.from_numpy(datum).to(device)
-            input_ids[0, target_start:target_start+target_len] = self.eos_word     # serve as masked words
+            input_ids[0, target_start:target_start+target_len] = self.eos_word     # mask out targets
 
             attn_mask = None
 
@@ -358,9 +374,6 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         probs = temperature(logits=logit, temperature=t)
         cur_word = nucleus(probs, p=p)
         return cur_word
-
-
-
 
 
 
