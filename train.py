@@ -154,7 +154,7 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         # for deciding whether the current input_ids is a <PAD> token
         self.tempo_pad_word = self.e2w['Tempo']['Tempo <PAD>']
 
-        self.eos_word = torch.Tensor([self.e2w[etype]['%s <EOS>' % etype] for etype in self.e2w]).to(device)
+        self.eos_word = torch.Tensor([self.e2w[etype]['%s <EOS>' % etype] for etype in self.e2w]).long().to(device)
         self.bos_word = torch.Tensor([self.e2w[etype]['%s <BOS>' % etype] for etype in self.e2w]).long().to(device)
 
         # word_emb: embeddings to change token ids into embeddings
@@ -171,6 +171,7 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         for i, etype in enumerate(self.e2w):
             self.proj.append(nn.Linear(xlnet_config.d_model, self.n_tokens[i]))
         self.proj = nn.ModuleList(self.proj)
+
 
     def forward(self, input_ids, attention_mask, perm_mask, target_mapping, input_ids_g=None):
         # convert input_ids into embeddings and merge them through linear layer
@@ -230,7 +231,7 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
                 target_starts = [np.random.randint(int(seq_len * (1 - args.target_max_percent))) for seq_len in valid_seq_lengths]
                 target_lens = [np.random.randint(int(seq_len * args.target_max_percent / 2), int(seq_len * args.target_max_percent)) for seq_len in valid_seq_lengths]
 
-                # prepare input_ids_g
+                # prepare input_ids_g: use bar+pos instead of sin+cos embeddings as position information
                 input_ids_g = torch.zeros(args.batch_size, max(target_lens), len(self.e2w)).long().to(device)
                 for b in range(args.batch_size):
                     input_ids_g[b, :target_lens[b]] = input_ids[b, target_starts[b]:target_starts[b]+target_lens[b]]
@@ -259,10 +260,15 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
 
 
                 # calculate losses
-                target = torch.zeros(args.batch_size, max(target_lens), len(self.e2w), dtype=torch.long)
+                target = torch.zeros(args.batch_size, max(target_lens), len(self.e2w), dtype=torch.long).to(device)
                 loss_mask = torch.zeros(args.batch_size, max(target_lens))
                 for b in range(args.batch_size):
-                    target[b, :target_lens[b], :] = input_ids[b, target_starts[b]:target_starts[b]+target_lens[b], :]
+                    target[b, :target_lens[b], [0, 3, 4, 5]] = input_ids[b, target_starts[b]:target_starts[b]+target_lens[b], [0, 3, 4, 5]]
+
+                    # next onset prediction
+                    target[b, :target_lens[b]-1, [1, 2]] = input_ids[b, target_starts[b]+1:target_starts[b]+target_lens[b], [1, 2]]
+                    target[b, target_lens[b]-1, [1, 2]] = self.eos_word[[1, 2]]
+
                     loss_mask[b, :target_lens[b]] = 1
                 losses = []
                 for i, etype in enumerate(self.e2w):
@@ -317,6 +323,7 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         print("Song idx: %d, song length: %d" % (song_idx, seq_len))
         print("Target_start: %d, target_len: %d" % (target_start, target_len))
 
+        first_onset = datum[0, target_start, [1, 2]]
         target_begin_token = [self.w2e[etype][datum[0, target_start, j]].split(' ')[1] for j, etype in enumerate(self.w2e)]
         target_end_token = [self.w2e[etype][datum[0, target_start+target_len-1, j]].split(' ')[1] for j, etype in enumerate(self.w2e)]
         save_midi_folder = "song%d_(start)bar%dpos%s_(end)bar%dpos%s" % (song_idx, int(target_begin_token[1])+1, target_begin_token[2], int(target_end_token[1])+1, target_end_token[2])
@@ -324,42 +331,61 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         os.makedirs(save_midi_folder, exist_ok=True)
         print("save midi to `%s`" % save_midi_folder)
 
+        # A_C -> AC
+        datum[:, target_start:seq_len-target_len] = datum[:, target_start+target_len:]
+        datum = datum[:, :seq_len-target_len]
+
         for sidx in range(n_songs):
             input_ids = torch.from_numpy(datum).to(device)
-            input_ids[0, target_start:target_start+target_len] = self.eos_word     # mask out targets
+            next_onset = torch.from_numpy(first_onset).long().to(device)
+
+            condition_len = input_ids.shape[1]
 
             attn_mask = None
 
-            # generate perm_mask
-            # 0: attend, 1: do not attend
-            perm_mask = torch.ones(1, seq_len, seq_len).to(device)
-            perm_mask[0, :, :target_start] = 0
-            perm_mask[0, :, target_start + target_len:] = 0
-            for i in range(target_start, target_start+target_len):
-                perm_mask[0, i, target_start:i] = 0
+            while True:
+                input_ids = torch.cat([input_ids, self.bos_word[None, None]], dim=1)
+                input_ids_g = torch.clone(self.bos_word)
+                input_ids_g[[1, 2]] = next_onset
+                input_ids_g = input_ids_g[None, None]
 
-            for target_pos in range(target_start, target_start+target_len):
+                # generate perm_mask
+                # 0: attend, 1: do not attend
+                perm_mask = torch.ones(1, input_ids.shape[1], input_ids.shape[1]).to(device)
+                perm_mask[0, :, :condition_len] = 0
+                for i in range(condition_len, input_ids.shape[1]):
+                    perm_mask[0, i, condition_len:i] = 0
+
                 # target mapping: partial prediction
-                target_mapping = torch.zeros(1, 1, seq_len).to(device)
-                target_mapping[0, 0, target_pos] = 1
+                target_mapping = torch.zeros(1, 1, input_ids.shape[1]).to(device)
+                target_mapping[0, 0, -1] = 1
 
-                y = self.forward(input_ids, attn_mask, perm_mask, target_mapping)
+                y = self.forward(input_ids, attn_mask, perm_mask, target_mapping, input_ids_g=input_ids_g)
 
+                # sampling
                 y_logits = []
                 for i, etype in enumerate(self.e2w):
                     y_logits.append(y[i][0, -1, :])
-
                 cur_word = []
                 for i, etype in enumerate(self.e2w):
                     cur_word.append(self.nucleus(y_logits[i], p=0.9, t=0.8))
-
                 cur_word = np.array(cur_word)
-                input_ids[0, target_pos] = torch.from_numpy(cur_word).to(device)
+
+                input_ids[0, -1, [1, 2]] = next_onset
+                input_ids[0, -1, [0, 3, 4, 5]] = torch.from_numpy(cur_word).to(device)[[0, 3, 4, 5]]
+                next_onset = torch.from_numpy(cur_word).to(device)[[1, 2]]
+
+                if 'EOS' in self.w2e['Bar'][cur_word[1]]:
+                    break
+                if 'EOS' in self.w2e['Position'][cur_word[2]]:
+                    break
+                if input_ids.shape[1] >= 1000:
+                    break
 
             input_ids = input_ids.cpu().detach().numpy()[0]
 
-            # for i in range(seq_len):
-            #     if i in range(target_start, target_start+target_len):
+            # for i in range(input_ids.shape[0]):
+            #     if i in range(condition_len, input_ids.shape[0]):
             #         print("(target)", end=' ')
             #     else:
             #         print("        ", end=' ')
