@@ -137,9 +137,9 @@ class Embeddings(nn.Module):
         return self.lut(x) * math.sqrt(self.d_model)
 
 class XLNetForPredictingMiddleNotes(torch.nn.Module):
-    def __init__(self, xlnet_config, e2w, w2e):
+    def __init__(self, xlnet_config, e2w, w2e, is_train=None):
         super(XLNetForPredictingMiddleNotes, self).__init__()
-        self.xlnet = XLNetModel(xlnet_config)
+        self.xlnet = XLNetModel(xlnet_config, is_train=is_train)
         self.xlnet_config = xlnet_config
         self.loss_func = nn.CrossEntropyLoss(reduction='none')
 
@@ -174,6 +174,10 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
 
 
     def forward(self, input_ids, attention_mask, perm_mask, target_mapping, input_ids_g=None):
+        """
+        Args:
+            input_ids: of shape [bsz, seq_len, n_event_type]. Input for content stream.
+        """
         # convert input_ids into embeddings and merge them through linear layer
         embs =[]
         for i, key in enumerate(self.e2w):
@@ -193,7 +197,8 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
                        attention_mask=attention_mask,
                        perm_mask=perm_mask,
                        target_mapping=target_mapping,
-                       inputs_embeds_g=emb_linear_g)
+                       inputs_embeds_g=emb_linear_g,
+                       bar_ids=input_ids[..., 1])
         y = y.last_hidden_state
 
         # convert embeddings back to logits for prediction
@@ -406,12 +411,18 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
 if __name__ == '__main__':
     with open(args.dict_file, 'rb') as f:
         e2w, w2e = pickle.load(f)
-    model = XLNetForPredictingMiddleNotes(configuration, e2w, w2e).to(device)
 
     if args.train:
+        model = XLNetForPredictingMiddleNotes(configuration, e2w, w2e, is_train=True).to(device)
+
+        # a = torch.Tensor([[0, 0, 0, 1, 1, 2], [0, 0, 1, 2, 2, 2]])
+        # model.xlnet.relative_positional_encoding(bar_ids=a)
+        # sys.exit(0)
+
         training_data = prepare_data.prepare_data_for_training(args.data_file, is_train=True, e2w=e2w, w2e=w2e, n_step_bars=args.n_step_bars, max_len=args.max_seq_len)
         model.train(training_data=training_data, n_epochs=args.train_epochs)
     else:
+        model = XLNetForPredictingMiddleNotes(configuration, e2w, w2e, is_train=False).to(device)
         test_data = prepare_data.prepare_data_for_training(args.data_file, is_train=False, e2w=e2w, w2e=w2e, n_step_bars=args.n_step_bars, max_len=args.max_seq_len)
         model.load_state_dict(torch.load(args.ckpt_path))
         for i in range(0, len(test_data), 10):
