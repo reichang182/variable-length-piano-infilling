@@ -25,9 +25,9 @@ VLI is a new Transformer-based model for music score infilling, i.e., to generat
 	python train.py
 
 ## Architecture
-![](figures/architecture.png)
+![](figures/architecture.png | width=150)
 
 ## Results
-![](figures/training_loss.png)
-![](figures/metric_difference.png)
-![](figures/subjective_evaluation.png)
+![](figures/training_loss.png | width=150)
+![](figures/metric_difference.png | width=150)
+![](figures/subjective_evaluation.png | width=150)
