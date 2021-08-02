@@ -30,5 +30,7 @@ VLI is a new Transformer-based model for music score infilling, i.e., to generat
 ## Results
 <img src="figures/training_loss.png" alt="drawing" width="600"/>
 <img src="figures/metric_difference.png" alt="drawing" width="600"/>
-<img src="figures/subjective_evaluation.png" alt="drawing" width="600"/>
-Results of the user study: mean opinion scores in 1–5 in M(melodic fluency), R(rhythmic fluency), I(im-pression), and percentage of votes in F(favorite), from ‘all’ the participants or only the music ‘pro’-fessionals.
+<figure class="image">	
+  <img src="figures/subjective_evaluation.png" alt="drawing" width="600"/>
+  <figcaption>{{ Results of the user study: mean opinion scores in 1–5 in M(melodic fluency), R(rhythmic fluency), I(im-pression), and percentage of votes in F(favorite), from ‘all’ the participants or only the music ‘pro’-fessionals. }}</figcaption>
+</figure>
