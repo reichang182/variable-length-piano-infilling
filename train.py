@@ -22,20 +22,20 @@ np.set_printoptions(threshold=sys.maxsize)
 parser = argparse.ArgumentParser(description='')
 
 # training setup
-parser.add_argument('--dict-file', type=str, default='/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/dictionary.pickle')
-parser.add_argument('--data-file', type=str, default='/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/worded_data.pickle')
+parser.add_argument('--dict-file', type=str, default='dictionary.pickle')
+parser.add_argument('--data-file', type=str, default='worded_data.pickle')
 parser.add_argument('--train', default=False, action='store_true')
-parser.add_argument('--save-path', type=str, default="/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/trained-models/partial-target-test")
+parser.add_argument('--save-path', type=str, default="trained-model", help='folder to save checkpoints')
 parser.add_argument('--batch-size', type=int, default=6)
-parser.add_argument('--target-max-percent', type=float, default=0.2, help="Up to `valid_seq_len * target_max_percent` tokens will be masked out for prediction")
-parser.add_argument('--n-step-bars', type=int, default=16, help='how many bars to step before next training data fetching (the smaller the more training data)')
+parser.add_argument('--target-max-percent', type=float, default=0.25, help="Up to `seq_len * target_max_percent` tokens will be masked out for prediction")
+parser.add_argument('--n-step-bars', type=int, default=8, help='how many bars to step before next training data fetching (the smaller the more training data)')
 parser.add_argument('--max-seq-len', type=int, default=512, help='all sequences are padded to `max_seq_len`')
 parser.add_argument('--train-epochs', type=int, default=2000, help='number of training epochs')
 parser.add_argument('--init-lr', type=float, default=1e-4, help='initial learning rate')
 
 # for prediction phase
-parser.add_argument('--test-data-file', type=str, default='/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes-test/worded_data.pickle')
-parser.add_argument('--ckpt-path', type=str, default="/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/trained-models/short-target-mapping/loss34.ckpt")
+parser.add_argument('--test-data-file', type=str, default='worded_data.pickle')
+parser.add_argument('--ckpt-path', type=str, default="trained-model/loss.ckpt", help='checkpoint to load.')
 parser.add_argument('--song-idx', type=int, default=170)
 
 args = parser.parse_args()
@@ -108,16 +108,13 @@ def temperature(logits, temperature):
 # search strategy: nucleus (truncate)
 ########################################
 def nucleus(probs, p):
-    # print('probs:', probs)
     probs /= sum(probs)
     sorted_probs = np.sort(probs)[::-1]
     sorted_index = np.argsort(probs)[::-1]
     cusum_sorted_probs = np.cumsum(sorted_probs)
     after_threshold = cusum_sorted_probs > p
-    # print('probs:', probs)
-    # print(after_threshold)
     if sum(after_threshold) > 0:
-        last_index = np.where(after_threshold)[0][1]
+        last_index = np.where(after_threshold)[0][0] + 1
 
         candi_index = sorted_index[:last_index]
     else:
@@ -147,6 +144,9 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         self.n_tokens = []
         for key in e2w:
             self.n_tokens.append(len(e2w[key]))
+        # Use relative bar instead of absolute bar encoding
+        self.n_tokens[1] = 4
+
         self.emb_sizes = [256, 256, 256, 256, 256, 256]
         self.e2w = e2w
         self.w2e = w2e
@@ -154,8 +154,9 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         # for deciding whether the current input_ids is a <PAD> token
         self.tempo_pad_word = self.e2w['Tempo']['Tempo <PAD>']
 
-        self.eos_word = torch.Tensor([self.e2w[etype]['%s <EOS>' % etype] for etype in self.e2w]).long().to(device)
-        self.bos_word = torch.Tensor([self.e2w[etype]['%s <BOS>' % etype] for etype in self.e2w]).long().to(device)
+        self.eos_word = torch.tensor([self.e2w[etype]['%s <EOS>' % etype] for etype in self.e2w]).long().to(device)
+        self.bos_word = torch.tensor([self.e2w[etype]['%s <BOS>' % etype] for etype in self.e2w]).long().to(device)
+        self.mask_word = torch.tensor([0, 0, 0, 0, 0, 0]).long().to(device)
 
         # word_emb: embeddings to change token ids into embeddings
         self.word_emb = []
@@ -173,7 +174,7 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         self.proj = nn.ModuleList(self.proj)
 
 
-    def forward(self, input_ids, attention_mask, perm_mask, target_mapping, input_ids_g=None):
+    def forward(self, input_ids, attention_mask, perm_mask, target_mapping, bar_ids=None, input_ids_g=None):
         """
         Args:
             input_ids: of shape [bsz, seq_len, n_event_type]. Input for content stream.
@@ -198,7 +199,7 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
                        perm_mask=perm_mask,
                        target_mapping=target_mapping,
                        inputs_embeds_g=emb_linear_g,
-                       bar_ids=input_ids[..., 1])
+                       bar_ids=bar_ids)
         y = y.last_hidden_state
 
         # convert embeddings back to logits for prediction
@@ -219,13 +220,20 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         os.makedirs(args.save_path, exist_ok=True)
         path_saved_ckpt = os.path.join(args.save_path, 'loss')
 
+        # calculate the index of start of bar6 and the end of bar9
+        start_end = np.zeros((len(training_data), 2))
+        for i in range(len(training_data)):
+            start_end[i][0] = np.nonzero(training_data[i, :, 1] == 6)[0][0]
+            start_end[i][1] = np.nonzero(training_data[i, :, 1] == 9)[0][-1]
+
         start_time = time.time()
         optimizer = AdamW(self.parameters(), lr=args.init_lr, weight_decay=0.01)
         num_batches = len(training_data) // args.batch_size
         for epoch in range(args.train_epochs):
             total_losses = 0
             for train_iter in range(num_batches):
-                input_ids = torch.from_numpy(training_data[train_iter*args.batch_size:(train_iter+1)*args.batch_size]).to(device)
+                input_ids = torch.from_numpy(training_data[train_iter * args.batch_size : (train_iter + 1) * args.batch_size]).to(device)
+                start_end_batch = start_end[train_iter * args.batch_size : (train_iter + 1) * args.batch_size]
 
                 # attn_mask: mask to avoid attending to <PAD> tokens
                 # 0: do not attend, 1: attend
@@ -235,12 +243,6 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
                 valid_seq_lengths = [torch.nonzero(seq)[-1][0] + 1 for seq in attn_mask] # seq length without <PAD> tokens
                 target_starts = [np.random.randint(int(seq_len * (1 - args.target_max_percent))) for seq_len in valid_seq_lengths]
                 target_lens = [np.random.randint(int(seq_len * args.target_max_percent / 2), int(seq_len * args.target_max_percent)) for seq_len in valid_seq_lengths]
-
-                # prepare input_ids_g: use bar+pos instead of sin+cos embeddings as position information
-                input_ids_g = torch.zeros(args.batch_size, max(target_lens), len(self.e2w)).long().to(device)
-                for b in range(args.batch_size):
-                    input_ids_g[b, :target_lens[b]] = input_ids[b, target_starts[b]:target_starts[b]+target_lens[b]]
-                    input_ids_g[b, :target_lens[b], [0, 3, 4, 5]] = self.bos_word[[0, 3, 4, 5]]  # mask out tokens except bar & pos
 
                 # generate perm_mask
                 # 0: attend, 1: do not attend
@@ -257,7 +259,23 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
                     for i, j in enumerate(range(target_starts[b], target_starts[b]+target_lens[b])):
                         target_mapping[b, i, j] = 1
 
-                y = self.forward(input_ids, attn_mask, perm_mask, target_mapping, input_ids_g=input_ids_g)
+                # change to use relative bar representation
+                bar_ids = torch.clone(input_ids[:, :, 1]).detach()
+                input_ids[:, 1:, 1] = input_ids[:, 1:, 1] - input_ids[:, :-1, 1]
+                input_ids[:, :, 1][input_ids[:, :, 1] > 1] = 1  # avoid bug when there are empty bars
+
+                # prepare input_ids_g: use bar+pos instead of sin+cos embeddings as position information
+                input_ids_g = torch.zeros(args.batch_size, max(target_lens), len(self.e2w)).long().to(device)
+                for b in range(args.batch_size):
+                    input_ids_g[b, :target_lens[b]] = input_ids[b, target_starts[b]:target_starts[b]+target_lens[b]]
+                    input_ids_g[b, :target_lens[b], [0, 3, 4, 5]] = self.bos_word[[0, 3, 4, 5]]  # mask out tokens except bar & pos
+
+                y = self.forward(input_ids,
+                                 attn_mask,
+                                 perm_mask,
+                                 target_mapping,
+                                 bar_ids=bar_ids,
+                                 input_ids_g=input_ids_g)
 
                 # reshape (b, s, f) -> (b, f, s)
                 for i, etype in enumerate(self.e2w):
@@ -272,7 +290,8 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
 
                     # next onset prediction
                     target[b, :target_lens[b]-1, [1, 2]] = input_ids[b, target_starts[b]+1:target_starts[b]+target_lens[b], [1, 2]]
-                    target[b, target_lens[b]-1, [1, 2]] = self.eos_word[[1, 2]]
+                    target[b, target_lens[b]-1, 1] = 2  # <REL-BAR EOS>
+                    target[b, target_lens[b]-1, 2] = self.eos_word[2]
 
                     loss_mask[b, :target_lens[b]] = 1
                 losses = []
@@ -320,15 +339,20 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         datum = np.array(data[song_idx:song_idx+1][0])[None]
         seq_len = datum.shape[1]
 
-        if target_start == None:
-            target_start = np.random.randint(int(seq_len * (1 - args.target_max_percent)))
-        if target_len == None:
-            target_len = np.random.randint(int(seq_len * args.target_max_percent * 0.75), int(seq_len * args.target_max_percent))
+        start_bar6 = np.nonzero(datum[0, :, 1] == 6)[0][0]
+        end_bar9   = np.nonzero(datum[0, :, 1] == 9)[0][-1]
+
+        # target_len = np.random.randint(int((end_bar9 - start_bar6) * 0.5), end_bar9 - start_bar6 + 1)
+        target_len = end_bar9 - start_bar6
+        # target_start = np.random.randint(start_bar6, end_bar9 - target_len + 1)
+        target_start = start_bar6
 
         print("Song idx: %d, song length: %d" % (song_idx, seq_len))
         print("Target_start: %d, target_len: %d" % (target_start, target_len))
 
         first_onset = datum[0, target_start, [1, 2]]
+        first_onset_rel = np.copy(datum[0, target_start, [1, 2]])
+        first_onset_rel[0] -= datum[0, target_start - 1, 1]
         target_begin_token = [self.w2e[etype][datum[0, target_start, j]].split(' ')[1] for j, etype in enumerate(self.w2e)]
         target_end_token = [self.w2e[etype][datum[0, target_start+target_len-1, j]].split(' ')[1] for j, etype in enumerate(self.w2e)]
         save_midi_folder = "song%d_(start)bar%dpos%s_(end)bar%dpos%s" % (song_idx, int(target_begin_token[1])+1, target_begin_token[2], int(target_end_token[1])+1, target_end_token[2])
@@ -336,23 +360,38 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
         os.makedirs(save_midi_folder, exist_ok=True)
         print("save midi to `%s`" % save_midi_folder)
 
+        # Save prime
+        prime = np.concatenate([datum[0, :target_start], datum[0, target_start + target_len :]], axis=0)
+        to_midi(prime, self.w2e, os.path.join(save_midi_folder, "song%d_prime_len%d.midi" % (song_idx, seq_len - target_len)))
+
+        # Save absolute Bar IDs
+        bar_ids_abs = np.copy(datum[:, :, 1])
+
+        # abs -> rel Bar IDs
+        datum[:, 1:, 1] = datum[:, 1:, 1] - datum[:, :-1, 1]
+        datum[:, :, 1][datum[:, :, 1] > 1] = 1  # avoid bug when there are empty bars
+
         # A_C -> AC
-        datum[:, target_start:seq_len-target_len] = datum[:, target_start+target_len:]
-        datum = datum[:, :seq_len-target_len]
+        datum[:, target_start : seq_len - target_len] = datum[:, target_start + target_len :]
+        datum = datum[:, : seq_len - target_len]
+        bar_ids_abs[:, target_start : seq_len - target_len] = bar_ids_abs[:, target_start + target_len :]
+        bar_ids_abs = bar_ids_abs[:, : seq_len - target_len]
 
         for sidx in range(n_songs):
             input_ids = torch.from_numpy(datum).to(device)
-            next_onset = torch.from_numpy(first_onset).long().to(device)
+            bar_ids = torch.from_numpy(bar_ids_abs).to(device)
 
+            next_bar_abs = torch.tensor(first_onset[0]).long().to(device)
+            next_onset = torch.from_numpy(first_onset_rel).long().to(device)
             condition_len = input_ids.shape[1]
-
             attn_mask = None
 
             while True:
-                input_ids = torch.cat([input_ids, self.bos_word[None, None]], dim=1)
+                input_ids = torch.cat([input_ids, self.mask_word[None, None]], dim=1)
                 input_ids_g = torch.clone(self.bos_word)
                 input_ids_g[[1, 2]] = next_onset
                 input_ids_g = input_ids_g[None, None]
+                bar_ids = torch.cat([bar_ids, next_bar_abs[None, None]], dim=-1)
 
                 # generate perm_mask
                 # 0: attend, 1: do not attend
@@ -365,7 +404,12 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
                 target_mapping = torch.zeros(1, 1, input_ids.shape[1]).to(device)
                 target_mapping[0, 0, -1] = 1
 
-                y = self.forward(input_ids, attn_mask, perm_mask, target_mapping, input_ids_g=input_ids_g)
+                y = self.forward(input_ids,
+                                 attn_mask,
+                                 perm_mask,
+                                 target_mapping,
+                                 bar_ids=bar_ids,
+                                 input_ids_g=input_ids_g)
 
                 # sampling
                 y_logits = []
@@ -379,8 +423,10 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
                 input_ids[0, -1, [1, 2]] = next_onset
                 input_ids[0, -1, [0, 3, 4, 5]] = torch.from_numpy(cur_word).to(device)[[0, 3, 4, 5]]
                 next_onset = torch.from_numpy(cur_word).to(device)[[1, 2]]
+                next_bar_abs = next_onset[0] + bar_ids[0, -1]
 
-                if 'EOS' in self.w2e['Bar'][cur_word[1]]:
+                # if 'EOS' in self.w2e['Bar'][cur_word[1]]:
+                if cur_word[1] == 2:
                     break
                 if 'EOS' in self.w2e['Position'][cur_word[2]]:
                     break
@@ -388,13 +434,8 @@ class XLNetForPredictingMiddleNotes(torch.nn.Module):
                     break
 
             input_ids = input_ids.cpu().detach().numpy()[0]
-
-            # for i in range(input_ids.shape[0]):
-            #     if i in range(condition_len, input_ids.shape[0]):
-            #         print("(target)", end=' ')
-            #     else:
-            #         print("        ", end=' ')
-            #     print(*[self.w2e[etype][input_ids[i, j]] for j, etype in enumerate(self.w2e)], sep=', ')
+            bar_ids = bar_ids.cpu().detach().numpy()[0]
+            input_ids[:, 1] = bar_ids
 
             to_midi(input_ids, self.w2e, os.path.join(save_midi_folder, "song%d_%d.midi" % (song_idx, sidx)))
 
@@ -414,17 +455,12 @@ if __name__ == '__main__':
 
     if args.train:
         model = XLNetForPredictingMiddleNotes(configuration, e2w, w2e, is_train=True).to(device)
-
-        # a = torch.Tensor([[0, 0, 0, 1, 1, 2], [0, 0, 1, 2, 2, 2]])
-        # model.xlnet.relative_positional_encoding(bar_ids=a)
-        # sys.exit(0)
-
         training_data = prepare_data.prepare_data_for_training(args.data_file, is_train=True, e2w=e2w, w2e=w2e, n_step_bars=args.n_step_bars, max_len=args.max_seq_len)
         model.train(training_data=training_data, n_epochs=args.train_epochs)
     else:
         model = XLNetForPredictingMiddleNotes(configuration, e2w, w2e, is_train=False).to(device)
         test_data = prepare_data.prepare_data_for_training(args.data_file, is_train=False, e2w=e2w, w2e=w2e, n_step_bars=args.n_step_bars, max_len=args.max_seq_len)
         model.load_state_dict(torch.load(args.ckpt_path))
-        for i in range(0, len(test_data), 10):
-            model.predict(data=test_data, n_songs=10, song_idx=i)
+        for i in range(300, len(test_data), 25):
+            model.predict(data=test_data, n_songs=3, song_idx=i)
 

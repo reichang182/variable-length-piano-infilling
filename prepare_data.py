@@ -11,6 +11,15 @@ import random
 import copy
 import statistics
 
+import argparse
+
+parser = argparse.ArgumentParser(description='')
+
+# training setup
+parser.add_argument('--midi-folder', type=str, default='datasets/midi/midi_synchronized', help="Folder containing the midi files.")
+parser.add_argument('--save-folder', type=str, default='./', help="Folder to save worded_data and dictionary.")
+args = parser.parse_args()
+
 GroupEvent = collections.namedtuple('GroupEvent', ['Tempo', 'Bar', 'Position', 'Pitch', 'Duration', 'Velocity'])
 tempo_quantize_step = 4
 
@@ -316,60 +325,24 @@ def load_tuple_event(files=None):
 
 def tuple_event_to_word(data, dict_file=None, save_path=None):
     with open(dict_file, 'rb') as f:
-        # e2w: a mapping dict which converts an event to a word
         e2w, w2e = pickle.load(f)
 
 
-    # worded_data = {'train': [], 'evaluation': []}   # worded_data['train']: [n_midi, n_bars, n_notes]
-    # for segment in ['train', 'evaluation']:
-    #     for midi in data[segment]:
-    #         words_in_midi = []
-    #         for bar in midi:
-    #             words_in_bar = []
-    #             for event in bar:
-    #                 words = [-1, # set value when the 8-bar chunk is selected (0 ~ 7), not e2w['Bar %d' % event.Bar]
-    #                          e2w['Position']['Position %s' % event.Position],
-    #                          e2w['Pitch']['Pitch %d' % event.Pitch],
-    #                          e2w['Duration']['Duration %d' % event.Duration],
-    #                          e2w['Velocity']['Velocity %d' % event.Velocity]]
-    #                 words_in_bar.append(words)
-    #             words_in_midi.append(words_in_bar)
-    #         worded_data[segment].append(words_in_midi)
-    worded_data = {'train': [], 'evaluation': []}   # worded_data['train']: [n_midi, n_bars, n_notes]
-    for segment in ['train', 'evaluation']:
-        for midi in data[segment]:
-            words_in_midi = []
-            for bar in midi:
-                words_in_bar = []
-                for event in bar:
-                    words = [e2w['Tempo']['Tempo %d' % (event.Tempo - event.Tempo % tempo_quantize_step)],
-                             -1, # set value when the 8-bar chunk is selected (0 ~ 7), not e2w['Bar %d' % event.Bar]
-                             e2w['Position']['Position %s' % event.Position],
-                             e2w['Pitch']['Pitch %d' % event.Pitch],
-                             e2w['Duration']['Duration %d' % event.Duration],
-                             e2w['Velocity']['Velocity %d' % event.Velocity]]
-                    words_in_bar.append(words)
-                words_in_midi.append(words_in_bar)
-            worded_data[segment].append(words_in_midi)
-
-
-    # Sanity check: convert words back to events, check whether they are the same
-    # evented_data = {'train': [], 'evaluation': []}
-    # for segment in ['train', 'evaluation']:
-    #     for midi in worded_data[segment]:
-    #         events_in_midi = []
-    #         for i, bar in enumerate(midi):
-    #             events_in_bar = []
-    #             for words in bar:   # words: [Bar, Pos, Pitch, Duration, Velocity]
-    #                 event = GroupEvent(Bar=i+1,
-    #                                    Position=w2e['Position'][words[1]].split(' ')[1],
-    #                                    Pitch=int(w2e['Pitch'][words[2]].split(' ')[1]),
-    #                                    Duration=int(w2e['Duration'][words[3]].split(' ')[1]),
-    #                                    Velocity=int(w2e['Velocity'][words[4]].split(' ')[1])
-    #                                    )
-    #                 events_in_bar.append(event)
-    #             events_in_midi.append(events_in_bar)
-    #         evented_data[segment].append(events_in_midi)
+    worded_data = []   # worded_data: [n_midi, n_bars, n_notes]
+    for midi in data:
+        words_in_midi = []
+        for bar in midi:
+            words_in_bar = []
+            for event in bar:
+                words = [e2w['Tempo']['Tempo %d' % (event.Tempo - event.Tempo % tempo_quantize_step)],
+                         -1, # set value when the 8-bar chunk is selected (0 ~ 7), not e2w['Bar %d' % event.Bar]
+                         e2w['Position']['Position %s' % event.Position],
+                         e2w['Pitch']['Pitch %d' % event.Pitch],
+                         e2w['Duration']['Duration %d' % event.Duration],
+                         e2w['Velocity']['Velocity %d' % event.Velocity]]
+                words_in_bar.append(words)
+            words_in_midi.append(words_in_bar)
+        worded_data.append(words_in_midi)
 
     # assert(evented_data == data)
     with open(save_path, 'wb') as handle:
@@ -396,9 +369,6 @@ def random_notes(bar_range, pos_range, pitch_range, duration_range, velocity_ran
 
     return words
 
-def load_remi():
-    tuple_events = load_tuple_event()
-    tuple_event_to_word(tuple_events)
 
 
 def convert_midis_to_worded_data(midi_folder, save_folder):
@@ -429,10 +399,8 @@ def prepare_data_for_training(data_file, e2w=None, w2e=None, is_train=True, n_st
     print("Loading from data file: %s" % data_file)
     with open(data_file, 'rb') as handle:
         data = pickle.load(handle)
-        if 'train' in data:
-            data = data['train']
-
     print("Number of midis:", len(data))
+
     n_bars_per_x = 16
     bos_word = []
     eos_word = []
@@ -442,9 +410,8 @@ def prepare_data_for_training(data_file, e2w=None, w2e=None, is_train=True, n_st
         eos_word.append(e2w[etype]['%s <EOS>' % etype])
         pad_word.append(e2w[etype]['%s <PAD>' % etype])
 
-    # shape of data['train'] or data['evaluation']: [n_midi, n_bars, n_notes, 5]. Last dimension is 5 since it contains `bar, position, pitch, duration and velocity`
+    # shape of data: [n_midi, n_bars, n_notes, 5]. Last dimension is 6 since it contains `tempo, bar, position, pitch, duration and velocity`
     x_lens = []
-    # for data_class in ['train']:
     xs = []
     song_idx = []
     for song_id, midi in enumerate(data):
@@ -458,42 +425,25 @@ def prepare_data_for_training(data_file, e2w=None, w2e=None, is_train=True, n_st
             # flatten list from [n_bars, n_notes, 5] to [n_bars * n_notes, 5]
             x = [copy.deepcopy(note_tuple) for bar in x for note_tuple in bar]
 
-
-            x_lens.append(len(x))
-
             if is_train:
-                while len(x) < max_len:
-                    x.append(pad_word)
-
-            if len(x) <= max_len:
-                xs.append(x)
+                if len(x) <= max_len:
+                    while len(x) < max_len:
+                        x.append(pad_word)
+                    xs.append(x)
+                    x_lens.append(len(x))
+            else:
+                if len(x) <= max_len:
+                    xs.append(x)
+                    x_lens.append(len(x))
 
     # statistics of x
     print("=" * 70)
     x_lens = np.array(x_lens)
     print("Mean, std, min, max of len(x):", statistics.mean(x_lens), statistics.stdev(x_lens), min(x_lens), max(x_lens))
-    # for i in range(500, 1000, 100):
-    #     print("number of data whose len < %d: %d" % (i, np.sum(x_lens < i)))
-    print("Total number of data", len(xs))
-    print("We use data whose len < %d, remained number of data: %d" % (max_len, len(xs)))
 
-    # shape of xs, ys: [n_training_data, seq_len, 5]
-    # -> xy: [n_training_data, 2, seq_len, 5]
-    # if is_train:
-    #     xs = np.array(xs)
-    #     ys = np.copy(xs)
-    #     ys[:, :-1, :] = xs[:, 1:, :]
-    #     ys[:, -1, :] = np.array(pad_word)
-    #     xs = xs[:, None, :, :]
-    #     ys = ys[:, None, :, :]
-    #     xy = np.array(np.concatenate([xs, ys], axis=1))
-    #     print("shape of xs, ys, xy", xs.shape, ys.shape, xy.shape)
-    #     print("=" * 70)
-    # else:
-    #     xy = np.array(xs)
-    xs = np.array(xs)
 
     # shuffle
+    xs = np.array(xs)
     if is_train:
         index = np.arange(len(xs))
         np.random.shuffle(index)
@@ -505,8 +455,6 @@ def split_data(data_file):
     dirname = os.path.dirname(data_file)
     with open(data_file, 'rb') as handle:
         data = pickle.load(handle)
-    with open(os.path.join(dirname, 'filenames.pickle'), 'rb') as handle:
-        fnames = pickle.load(handle)
 
     data = data['train']
     print("origin length of data", len(data))
@@ -517,35 +465,24 @@ def split_data(data_file):
 
     # shuffle
     data = np.array(data)
-    fnames = np.array(fnames)
     # index = np.arange(n_data)
     with open('shuffle_order.pickle', 'rb') as f:
         index = pickle.load(f)
     np.random.shuffle(index)
     data = data[index]
-    fnames = fnames[index]
 
 
-    with open(os.path.join(dirname, 'worded_data_with_tempo_train.pickle'), 'wb') as handle:
+    with open(os.path.join(dirname, 'worded_data_train.pickle'), 'wb') as handle:
         pickle.dump(data[:n_train], handle, protocol=pickle.HIGHEST_PROTOCOL)
-    with open(os.path.join(dirname, 'filenames_train.pickle'), 'wb') as handle:
-        pickle.dump(fnames[:n_train], handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    with open(os.path.join(dirname, 'worded_data_with_tempo_test.pickle'), 'wb') as handle:
+    with open(os.path.join(dirname, 'worded_data_test.pickle'), 'wb') as handle:
         pickle.dump(data[n_train:], handle, protocol=pickle.HIGHEST_PROTOCOL)
-    with open(os.path.join(dirname, 'filenames_test.pickle'), 'wb') as handle:
-        pickle.dump(fnames[n_train:], handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 if __name__ == '__main__':
     # for loading training data
-    # midi_folder = '/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/datasets/midi/midi_synchronized/'
-    # save_folder = '/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/'
-    # convert_midis_to_worded_data(midi_folder, save_folder)
-
-    # for loading testing data
-    midi_folder = '/home/csc63182/NAS-189/homes/csc63182/data/cp_linear_from-scratch_codes/gen_global_mall/gpu2'
-    save_folder = '/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes-test/'
+    midi_folder = '/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/datasets/midi/midi_synchronized/'
+    save_folder = '/home/csc63182/NAS-189/homes/csc63182/data/remi-1700/predict-middle-notes/'
     convert_midis_to_worded_data(midi_folder, save_folder)
 
 
