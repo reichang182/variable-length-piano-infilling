@@ -24,6 +24,23 @@ pip install -r requirement.txt
 
 	# Test the trained model
 	python train.py
+	
+## Baselines
+The codes to run baselines in our paper are in the ```baselines``` folder.
+We implement ILM and FELIX according to their paper ([ILM](https://arxiv.org/abs/2005.05339) and [FELIX](https://arxiv.org/abs/2003.10687)) and based on the implementation of Transformer-XL and BERT in [Huggingface Transformer](https://github.com/reichang182/Transformer).
+They can also be trained and tested through the same command as our model does above.
+	
+	# cd baselines/ILM or cd baselines/FELIX
+	
+	# Train the model
+	python train.py --train \
+		--dict-file ../../dictionary.pickle
+		--data-file ../../worded_data.pickle
+	
+	# Test the trained model
+	python train.py \
+		--dict-file ../../dictionary.pickle
+		--data-file ../../worded_data.pickle
 
 ## Architecture
 <img src="figures/architecture.png" alt="drawing" width="600"/>
