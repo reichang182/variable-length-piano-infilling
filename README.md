@@ -46,11 +46,13 @@ They can also be trained and tested through the same command as our model does a
 <img src="figures/architecture.png" alt="drawing" width="600"/>
 
 ## Results
-<figure>
+<figure style="background-color:red;">
   <img src="figures/training_loss.png" alt="drawing" width="600"/>
   <figcaption>The training NLL-loss curves of ours and baseline models.</figcaption>
 </figure>
+<br><br><br><br>
 <img src="figures/metric_difference.png" alt="drawing" width="600"/>
+<br><br><br><br>
 <figure>	
   <img src="figures/subjective_evaluation.png" alt="drawing" width="600"/>
   <figcaption>Results of the user study: mean opinion scores in 1–5 in M(melodic fluency), R(rhythmic fluency), I(im-pression), and percentage of votes in F(favorite), from ‘all’ the participants or only the music ‘pro’-fessionals.</figcaption>
