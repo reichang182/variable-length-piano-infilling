@@ -48,7 +48,7 @@ They can also be trained and tested through the same command as our model does a
 ## Results
 <figure style="background-color:red;">
   <img src="figures/training_loss.png" alt="drawing" width="600"/>
-  <figcaption>The training NLL-loss curves of ours and baseline models.</figcaption>
+  <figcaption>The training NLL-loss curves of ours and the baseline models.</figcaption>
 </figure>
 <br><br><br>
 <figure>
