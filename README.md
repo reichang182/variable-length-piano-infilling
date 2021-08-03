@@ -34,12 +34,12 @@ They can also be trained and tested through the same command as our model does a
 	
 	# Train the model
 	python train.py --train \
-		--dict-file ../../dictionary.pickle
+		--dict-file ../../dictionary.pickle \
 		--data-file ../../worded_data.pickle
 	
 	# Test the trained model
 	python train.py \
-		--dict-file ../../dictionary.pickle
+		--dict-file ../../dictionary.pickle \
 		--data-file ../../worded_data.pickle
 
 ## Architecture
