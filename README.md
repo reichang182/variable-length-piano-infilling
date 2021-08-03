@@ -46,7 +46,10 @@ They can also be trained and tested through the same command as our model does a
 <img src="figures/architecture.png" alt="drawing" width="600"/>
 
 ## Results
-<img src="figures/training_loss.png" alt="drawing" width="600"/>
+<figure>
+  <img src="figures/training_loss.png" alt="drawing" width="600"/>
+  <figcaption>The training NLL-loss curves of ours and baseline models.</figcaption>
+</figure>
 <img src="figures/metric_difference.png" alt="drawing" width="600"/>
 <figure>	
   <img src="figures/subjective_evaluation.png" alt="drawing" width="600"/>
