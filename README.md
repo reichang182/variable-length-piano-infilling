@@ -42,6 +42,9 @@ They can also be trained and tested through the same command as our model does a
 		--dict-file ../../dictionary.pickle \
 		--data-file ../../worded_data.pickle
 
+## Demo Page
+A demonstration page of the generated music can be found [here](https://jackyhsiung.github.io/infilling-demo-page/).
+
 ## Architecture
 <img src="figures/architecture.png" alt="drawing" width="600"/>
 
