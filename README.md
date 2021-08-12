@@ -1,5 +1,5 @@
 # Variable-Length-Piano-Infilling
-The official implementation of Variable-Length Piano Infilling (VLI). (paper: Variable-Length Music Score Infilling via XLNet and Musically Specialized Positional Encoding)
+The official implementation of Variable-Length Piano Infilling (VLI). ([paper: Variable-Length Music Score Infilling via XLNet and Musically Specialized Positional Encoding](http://arxiv.org/abs/2108.05064))
 
 VLI is a new Transformer-based model for music score infilling, i.e., to generate a polyphonic music sequence that fills in the gap between given past and future contexts. Our model can infill a variable number of notes for different time spans. 
 
@@ -43,7 +43,7 @@ They can also be trained and tested through the same command as our model does a
 		--data-file ../../worded_data.pickle
 
 ## Demo Page
-A demonstration page of the generated music can be found [here](https://jackyhsiung.github.io/infilling-demo-page/).
+A demonstration page of the generated music can be found [here](https://jackyhsiung.github.io/piano-infilling-demo/).
 
 ## Architecture
 <img src="figures/architecture.png" alt="drawing" width="600"/>
