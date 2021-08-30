@@ -297,17 +297,14 @@ def construct_dict(save_dict_path):
 
 
 def load_tuple_event(files=None):
-    data = {'train':[], 'evaluation': []}
+    data = []
     if files == None:
         files = glob.glob(os.path.join(data_path, '*.midi'))
-    for data_segment in ['train', 'evaluation']:
-        for midifile in files:
-            events = extract_tuple_events(midifile)
-            events = group_by_bar(events)   # shape of events: [n_bars, n_notes_per_bar]
-            # TODO song too long?
-            data[data_segment].append(events)
-
-        print('number of midi for %s: %d' % (data_segment, len(data[data_segment])))
+    for midifile in files:
+        events = extract_tuple_events(midifile)
+        events = group_by_bar(events)   # shape of events: [n_bars, n_notes_per_bar]
+        # TODO song too long?
+        data.append(events)
 
 
     return data
