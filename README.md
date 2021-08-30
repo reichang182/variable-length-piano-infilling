@@ -8,7 +8,7 @@ VLI is a new Transformer-based model for music score infilling, i.e., to generat
 2. Clone this repo and install the required packages.
 ```
 git clone https://github.com/reichang182/Variable-Length-Piano-Infilling.git
-cd  Variable-Length-Piano-Infilling
+cd  variable-length-piano-infilling
 pip install -r requirement.txt
 ```
 3. Download and unzip the AIlabs.tw Pop1K7 dataset. (Download link: [here](https://drive.google.com/file/d/1qw_tVUntblIg4lW16vbpjLXVndkVtgDe/view?usp=sharing)).
