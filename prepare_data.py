@@ -11,17 +11,6 @@ import random
 import copy
 import statistics
 
-import argparse
-
-parser = argparse.ArgumentParser(description='')
-
-# training setup
-parser.add_argument('--midi-folder', type=str, default='datasets/midi/midi_synchronized', help="Folder containing the midi files.")
-parser.add_argument('--save-folder', type=str, default='./', help="Folder to save worded_data and dictionary.")
-args = parser.parse_args()
-
-GroupEvent = collections.namedtuple('GroupEvent', ['Tempo', 'Bar', 'Position', 'Pitch', 'Duration', 'Velocity'])
-tempo_quantize_step = 4
 
 def extract_events(input_path):
     note_items, tempo_items = utils.read_items(input_path)
@@ -480,6 +469,18 @@ def split_data(data_file):
 
 
 if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser(description='')
+
+    # training setup
+    parser.add_argument('--midi-folder', type=str, default='datasets/midi/midi_synchronized', help="Folder containing the midi files.")
+    parser.add_argument('--save-folder', type=str, default='./', help="Folder to save worded_data and dictionary.")
+    args = parser.parse_args()
+
+    GroupEvent = collections.namedtuple('GroupEvent', ['Tempo', 'Bar', 'Position', 'Pitch', 'Duration', 'Velocity'])
+    tempo_quantize_step = 4
+    
     # for loading training data
     convert_midis_to_worded_data(args.midi_folder, args.save_folder)
 
