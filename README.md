@@ -5,6 +5,12 @@ VLI is a new Transformer-based model for music score infilling, i.e., to generat
 
 ## Installation
 1. Clone and install the modified [Huggingface Transformer](https://github.com/reichang182/Transformer) package.
+```
+git clone https://github.com/reichang182/Transformer.git
+cd  Transformer
+pip install -e .
+cd  ..
+```
 2. Clone this repo and install the required packages.
 ```
 git clone https://github.com/reichang182/variable-length-piano-infilling.git
